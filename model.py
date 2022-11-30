@@ -433,6 +433,88 @@ class VAE_TwoLayer(nn.Module):
             optimizer.step()
         return elbo_favi, elbo
 
+    def savi_accurate(self, x, iter, lr, mode="sgvb2", seed=-1):
+        b, c, h, w = x.shape
+        assert (b==1)
+        with torch.no_grad():
+            elbo_favi, z1_mu, z1_sigma, z2_mu, z2_sigma = self.forward(x, mode="sgvb2", return_param=True, seed=seed)
+        z1_mu = z1_mu.detach().clone().requires_grad_(True)
+        z1_sigma = z1_sigma.detach().clone().requires_grad_(True)
+        cur_params = [z1_mu, z1_sigma]
+        optimizer = optim.SGD(cur_params, lr=lr, momentum=self.mom)
+        for i in range(iter):
+            dist_q_z1_con_x = torch.distributions.normal.Normal(z1_mu, self.lb(z1_sigma))
+            self.setseed(seed)
+            z1_hat = dist_q_z1_con_x.rsample()
+            log_q_z1_con_x = dist_q_z1_con_x.log_prob(z1_hat)
+            z2_mu, z2_sigma = self._encode_2(z1_hat)
+            dist_q_z2_con_z1 = torch.distributions.normal.Normal(z2_mu, self.lb(z2_sigma))
+            self.setseed(seed)
+            z2_hat = dist_q_z2_con_z1.rsample()
+            log_q_z2_con_z1 = dist_q_z2_con_z1.log_prob(z2_hat)
+            dist_p_z2 = torch.distributions.normal.Normal(0,1)
+            log_p_z2 = dist_p_z2.log_prob(z2_hat)
+            p_z1_mu, p_z1_sigma = self._decode_2(z2_hat)
+            dist_p_z1_con_z2 = torch.distributions.normal.Normal(p_z1_mu, p_z1_sigma)
+            log_p_z2_con_z1 = dist_p_z1_con_z2.log_prob(z1_hat)
+            x_logits = self._decode_1(z1_hat)
+            dist_x_con_z1 = torch.distributions.categorical.Categorical(logits=x_logits)
+            log_p_x_con_z1 = dist_x_con_z1.log_prob(x.long())
+            if mode == "sgvb1":
+                elbo = torch.sum(log_p_x_con_z1, dim=(1,2,3)) +\
+                    torch.sum(log_p_z2_con_z1, dim=1) + torch.sum(log_p_z2, dim=1) -\
+                    torch.sum(log_q_z1_con_x, dim=1) -\
+                    torch.sum(log_q_z2_con_z1, dim=1)
+            elif mode == "sgvb2":
+                elbo = torch.sum(log_p_x_con_z1, dim=(1,2,3)) +\
+                    0.5 * torch.sum((1 + 2 * torch.log(z2_sigma) - z2_mu ** 2 - z2_sigma ** 2), dim=1) +\
+                    0.5 * torch.sum((1 + 2 * torch.log(z1_sigma) - 2 * torch.log(p_z1_sigma) - (z1_sigma**2 + (z1_mu - p_z1_mu)**2) / (p_z1_sigma**2)), dim=1)
+            else:
+                raise NotImplementedError
+            loss = - torch.mean(elbo / (c * h * w), dim=0)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        z1_mu = z1_mu.detach().clone().requires_grad_(False)
+        z1_sigma = z1_sigma.detach().clone().requires_grad_(False)
+        z2_mu = z2_mu.detach().clone().requires_grad_(True)
+        z2_sigma = z2_sigma.detach().clone().requires_grad_(True)
+        cur_params = [z2_mu, z2_sigma]
+        optimizer = optim.SGD(cur_params, lr=lr, momentum=self.mom)
+        for i in range(iter):
+            dist_q_z1_con_x = torch.distributions.normal.Normal(z1_mu, self.lb(z1_sigma))
+            self.setseed(seed)
+            z1_hat = dist_q_z1_con_x.rsample()
+            log_q_z1_con_x = dist_q_z1_con_x.log_prob(z1_hat)
+            dist_q_z2_con_z1 = torch.distributions.normal.Normal(z2_mu, self.lb(z2_sigma))
+            self.setseed(seed)
+            z2_hat = dist_q_z2_con_z1.rsample()
+            log_q_z2_con_z1 = dist_q_z2_con_z1.log_prob(z2_hat)
+            dist_p_z2 = torch.distributions.normal.Normal(0,1)
+            log_p_z2 = dist_p_z2.log_prob(z2_hat)
+            p_z1_mu, p_z1_sigma = self._decode_2(z2_hat)
+            dist_p_z1_con_z2 = torch.distributions.normal.Normal(p_z1_mu, p_z1_sigma)
+            log_p_z2_con_z1 = dist_p_z1_con_z2.log_prob(z1_hat)
+            x_logits = self._decode_1(z1_hat)
+            dist_x_con_z1 = torch.distributions.categorical.Categorical(logits=x_logits)
+            log_p_x_con_z1 = dist_x_con_z1.log_prob(x.long())
+            if mode == "sgvb1":
+                elbo = torch.sum(log_p_x_con_z1, dim=(1,2,3)) +\
+                    torch.sum(log_p_z2_con_z1, dim=1) + torch.sum(log_p_z2, dim=1) -\
+                    torch.sum(log_q_z1_con_x, dim=1) -\
+                    torch.sum(log_q_z2_con_z1, dim=1)
+            elif mode == "sgvb2":
+                elbo = torch.sum(log_p_x_con_z1, dim=(1,2,3)) +\
+                    0.5 * torch.sum((1 + 2 * torch.log(z2_sigma) - z2_mu ** 2 - z2_sigma ** 2), dim=1) +\
+                    0.5 * torch.sum((1 + 2 * torch.log(z1_sigma) - 2 * torch.log(p_z1_sigma) - (z1_sigma**2 + (z1_mu - p_z1_mu)**2) / (p_z1_sigma**2)), dim=1)
+            else:
+                raise NotImplementedError
+            loss = - torch.mean(elbo / (c * h * w), dim=0)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        return elbo_favi, elbo
+
     def savi_approx(self, x, iter, lr, mode="sgvb2", seed=-1):
         pass
     def eval_savi(self, x, iter, lr, mode="sgvb2", seed=-1):

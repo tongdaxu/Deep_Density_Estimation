@@ -47,7 +47,7 @@ def main(args):
         model = VAE_SingleLayer()
     elif args.model == "VAE_TwoLayer":
         model = VAE_TwoLayer()
-    elif args.midel == "VAE_TwoLayer_Alt":
+    elif args.model == "VAE_TwoLayer_Alt":
         model = VAE_TwoLayer_Alt()
     else:
         raise NotImplementedError
