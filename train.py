@@ -11,6 +11,10 @@ from tqdm import tqdm
 from pathlib import Path
 from model import BinarizeMnist, ScaleMnist, VAE_SingleLayer, VAE_TwoLayer, VAE_TwoLayer_Alt
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
+
+
 def save_checkpoint(model, optimizer, epoch, checkpoint_dir):
     checkpoint_state = {
         "model": model.state_dict(),

@@ -9,7 +9,9 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms, utils
 from tqdm import tqdm
 from pathlib import Path
-from model import Binarize, VAE_SingleLayer, VAE_TwoLayer
+from model import BinarizeMnist, VAE_SingleLayer, VAE_TwoLayer
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "6"
 
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -19,7 +21,7 @@ def main(args):
     model.load_state_dict(checkpoint["model"], strict=False)
     transform_test= transforms.Compose([
         transforms.ToTensor(),
-        Binarize()
+        BinarizeMnist()
     ])
     test_dataset = datasets.MNIST("./MNIST", train=False, download=True,
                                     transform=transform_test)
@@ -27,28 +29,31 @@ def main(args):
                                  num_workers=args.num_workers, pin_memory=True)
     N = 1 * 28 * 28
     model.eval()
-    average_elbo_favi = average_elbo_naive = average_eblo_appro = 0
+    average_elbo_favi = average_elbo_naive = average_eblo_appro = average_eblo_accur = 0
     valid_i = 1
     for i, (images, _) in enumerate(test_dataloader, 1):
         images = images.to(device)
-        elbo_favi, elbo_naive, elbo_appro = model.eval_savi(images, args.num_iter, args.learning_rate, "sgvb2", 3470)
-        if torch.isnan(elbo_favi).any() or torch.isnan(elbo_naive).any() or torch.isnan(elbo_appro).any():
+        elbo_favi, elbo_naive, elbo_appro, elbo_accur = model.eval_savi(images, args.num_iter, args.learning_rate, "sgvb2", 3470)
+        if torch.isnan(elbo_favi).any() or torch.isnan(elbo_naive).any() or torch.isnan(elbo_appro).any() or torch.isnan(elbo_accur).any():
             # ignore nan sample at this time
             continue
         valid_i += 1
         elbo_favi = torch.mean(elbo_favi / N, dim=0)
         elbo_naive = torch.mean(elbo_naive / N, dim=0)
         elbo_appro = torch.mean(elbo_appro / N, dim=0)
+        elbo_accur = torch.mean(elbo_accur / N, dim=0)
         average_elbo_favi += elbo_favi.item()
         average_elbo_naive += elbo_naive.item()
         average_eblo_appro += elbo_appro.item()
+        average_eblo_accur += elbo_accur.item()
         if i == 500:
             break
     average_elbo_favi /= valid_i
     average_elbo_naive /= valid_i
     average_eblo_appro /= valid_i
-    print("[test] elbo favi: {:.3f}, elbo naive: {:.3f}, elbo approx: {:.3f}"
-        .format(average_elbo_favi * N, average_elbo_naive * N, average_eblo_appro * N))
+    average_eblo_accur /= valid_i
+    print("[test] elbo favi: {:.10f}, elbo naive: {:.10f}, elbo approx: {:.10f}, elbo accur: {:.10f}"
+        .format(average_elbo_favi * N, average_elbo_naive * N, average_eblo_appro * N, average_eblo_accur * N))
 
 
 if __name__ == "__main__":
